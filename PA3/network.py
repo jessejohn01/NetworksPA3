@@ -33,13 +33,18 @@ class Interface:
 # NOTE: This class will need to be extended to for the packet to include
 # the fields necessary for the completion of this assignment.
 class NetworkPacket:
-    ## packet encoding lengths 
-    dst_addr_S_length = 5
+    ## packet encoding lengths
+    packetIDLength = 4 #We are going to make it so you can have 16 individual packet IDs. Type is Bytes. 
     
+    dst_addr_S_length = 5 #Length of the destination address in bytes
+    lastPacketFlagLength = 1; #How long (in bytes) our last packet flag is.
+    identifierLength = packetIDLength + dst_addr_S_length + lastPacketFlagLength
     ##@param dst_addr: address of the destination host
     # @param data_S: packet payload
-    def __init__(self, dst_addr, data_S):
+    def __init__(self, dst_addr, packetID, endFlag, data_S):
         self.dst_addr = dst_addr
+        self.packetID = packetID
+        self.endFlag = endFlag
         self.data_S = data_S
         
     ## called when printing the object
@@ -49,6 +54,8 @@ class NetworkPacket:
     ## convert packet to a byte string for transmission over links
     def to_byte_S(self):
         byte_S = str(self.dst_addr).zfill(self.dst_addr_S_length)
+        byte_S += str(self.packetID).zfill(self.packetIDLength)
+        byte_S += str(self.endFlag).zfill(self.lastPacketFlagLength)
         byte_S += self.data_S
         return byte_S
     
@@ -56,12 +63,18 @@ class NetworkPacket:
     # @param byte_S: byte string representation of the packet
     @classmethod
     def from_byte_S(self, byte_S):
-        dst_addr = int(byte_S[0 : NetworkPacket.dst_addr_S_length])
-        data_S = byte_S[NetworkPacket.dst_addr_S_length : ]
-        return self(dst_addr, data_S)
+        dst_addr = int(byte_S[0 : NetworkPacket.dst_addr_S_length]) #This says the destination address is from 
+        packetID = int(byte_S[NetworkPacket.dst_addr_S_length: (NetworkPacket.dst_addr_S_length + NetworkPacket.packetIDLength)]) #From the end of the address to the end of ID length.
+        endFlag = int(byte_S[(NetworkPacket.dst_addr_S_length + NetworkPacket.packetIDLength) :((NetworkPacket.dst_addr_S_length + NetworkPacket.packetIDLength) + NetworkPacket.lastPacketFlagLength)])
+        data_S = byte_S[((NetworkPacket.dst_addr_S_length + NetworkPacket.packetIDLength) + NetworkPacket.lastPacketFlagLength) : ] #The rest is data.
+        return self(dst_addr,packetID, endFlag, data_S)
     
 
-    
+    def isTooLong(self,mtu):
+        if(mtu - (self.identifierLength + len(self.data_S)) < 0):
+            return True
+        else:
+            return False 
 
 ## Implements a network host for receiving and transmitting data
 class Host:
@@ -81,10 +94,14 @@ class Host:
     # @param dst_addr: destination address for the packet
     # @param data_S: data being transmitted to the network layer
     def udt_send(self, dst_addr, data_S):
-        p = NetworkPacket(dst_addr, data_S)
-        self.out_intf_L[0].put(p.to_byte_S()) #send packets always enqueued successfully
-        print('%s: sending packet "%s" on the out interface with mtu=%d' % (self, p, self.out_intf_L[0].mtu))
         
+        packetList = [] #Creates a list of segmented packets to send
+        p = NetworkPacket(dst_addr,0, 1, data_S) # Our initial packet 
+        self.segmentPacket(packetList, p, self.out_intf_L[0].mtu)#Split the packets up.
+        for x in range(len(packetList)):      
+            self.out_intf_L[0].put(packetList[x].to_byte_S()) #send packets always enqueued successfully
+            print('%s: sending packet "%s" on the out interface with mtu=%d' % (self, packetList[x], self.out_intf_L[0].mtu))
+  
     ## receive packet from the network layer
     def udt_receive(self):
         pkt_S = self.in_intf_L[0].get()
@@ -102,7 +119,16 @@ class Host:
                 print (threading.currentThread().getName() + ': Ending')
                 return
         
-
+    def segmentPacket(self, packetList,p,mtu): #This method keeps splitting packets down until we can send the entire message.
+        if(p.isTooLong(mtu)):
+            maxDataSize = (mtu-p.identifierLength)#Max size of data.
+            filledMTU = NetworkPacket(p.dst_addr,p.packetID,0,p.data_S[0: maxDataSize])
+            packetList.append(filledMTU)#Adds a max size packet into the packetList
+            q = NetworkPacket(p.dst_addr,((p.packetID)+1),1,p.data_S[maxDataSize: ]) #Creates another packet to be checked for size.
+            self.segmentPacket(packetList,q,mtu)#Recursivly checks size.
+        else:
+            packetList.append(p)
+  
 
 ## Implements a multi-interface router described in class
 class Router:
