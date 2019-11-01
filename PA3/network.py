@@ -34,7 +34,7 @@ class Interface:
 # the fields necessary for the completion of this assignment.
 class NetworkPacket:
     ## packet encoding lengths
-    packetIDLength = 4 #We are going to make it so you can have 16 individual packet IDs. Type is Bytes. 
+    packetIDLength = 2 #We are going to make it so you can have 99 individual packet IDs. Type is bytes  
     
     dst_addr_S_length = 5 #Length of the destination address in bytes
     lastPacketFlagLength = 1; #How long (in bytes) our last packet flag is.
@@ -85,6 +85,7 @@ class Host:
         self.in_intf_L = [Interface()]
         self.out_intf_L = [Interface()]
         self.stop = False #for thread termination
+        self.packetIDGen = 0 #Generates a packet ID.
     
     ## called when printing the object
     def __str__(self):
@@ -96,18 +97,29 @@ class Host:
     def udt_send(self, dst_addr, data_S):
         
         packetList = [] #Creates a list of segmented packets to send
-        p = NetworkPacket(dst_addr,0, 1, data_S) # Our initial packet 
+        p = NetworkPacket(dst_addr,self.packetIDGen, 1, data_S) # Our initial packet 
         self.segmentPacket(packetList, p, self.out_intf_L[0].mtu)#Split the packets up.
         for x in range(len(packetList)):      
             self.out_intf_L[0].put(packetList[x].to_byte_S()) #send packets always enqueued successfully
             print('%s: sending packet "%s" on the out interface with mtu=%d' % (self, packetList[x], self.out_intf_L[0].mtu))
+        self.packetIDGen += 1
   
     ## receive packet from the network layer
     def udt_receive(self):
         pkt_S = self.in_intf_L[0].get()
-        if pkt_S is not None:
-            print('%s: received packet "%s" on the in interface' % (self, pkt_S))
-       
+        reconstructionString = ''
+        if pkt_S is not None: 
+            p = NetworkPacket.from_byte_S(pkt_S)          
+            print('%s: received packet "%s" on the in interface' % (self, pkt_S)) 
+            reconstructionString += p.data_S
+            while(p.endFlag != 1):
+                pkt_S = None
+                pkt_S = self.in_intf_L[0].get()
+                if pkt_S is not None:
+                    p = NetworkPacket.from_byte_S(pkt_S)   
+                    reconstructionString += p.data_S
+            print("Message: " + reconstructionString)        
+
     ## thread target for the host to keep receiving data
     def run(self):
         print (threading.currentThread().getName() + ': Starting')
@@ -124,7 +136,7 @@ class Host:
             maxDataSize = (mtu-p.identifierLength)#Max size of data.
             filledMTU = NetworkPacket(p.dst_addr,p.packetID,0,p.data_S[0: maxDataSize])
             packetList.append(filledMTU)#Adds a max size packet into the packetList
-            q = NetworkPacket(p.dst_addr,((p.packetID)+1),1,p.data_S[maxDataSize: ]) #Creates another packet to be checked for size.
+            q = NetworkPacket(p.dst_addr,p.packetID,1,p.data_S[maxDataSize: ]) #Creates another packet to be checked for size.
             self.segmentPacket(packetList,q,mtu)#Recursivly checks size.
         else:
             packetList.append(p)
@@ -161,13 +173,29 @@ class Router:
                     # HERE you will need to implement a lookup into the 
                     # forwarding table to find the appropriate outgoing interface
                     # for now we assume the outgoing interface is also i
-                    self.out_intf_L[i].put(p.to_byte_S(), True)
-                    print('%s: forwarding packet "%s" from interface %d to %d with mtu %d' \
-                        % (self, p, i, i, self.out_intf_L[i].mtu))
+                    packetList = [] #Creates a list of segmented packets to send
+                    self.segmentPacket(packetList, p, self.out_intf_L[0].mtu)#Split the packets up.
+                    for x in range(len(packetList)):      
+                        self.out_intf_L[i].put(packetList[x].to_byte_S(), True)
+                        print('%s: forwarding packet "%s" from interface %d to %d with mtu %d' % (self, packetList[x], i, i, self.out_intf_L[i].mtu))
             except queue.Full:
                 print('%s: packet "%s" lost on interface %d' % (self, p, i))
                 pass
-                
+    def segmentPacket(self, packetList,p,mtu): #This method keeps splitting packets down until we can send the entire message.
+        if(p.isTooLong(mtu) and p.endFlag == 0):
+            maxDataSize = (mtu-p.identifierLength)#Max size of data.
+            filledMTU = NetworkPacket(p.dst_addr,p.packetID,0,p.data_S[0: maxDataSize])
+            packetList.append(filledMTU)#Adds a max size packet into the packetList
+            q = NetworkPacket(p.dst_addr,p.packetID,0,p.data_S[maxDataSize: ]) #Creates another packet to be checked for size.
+            self.segmentPacket(packetList,q,mtu)#Recursivly checks size.
+        elif(p.isTooLong(mtu) and p.endFlag == 1):
+            maxDataSize = (mtu-p.identifierLength)#Max size of data.
+            filledMTU = NetworkPacket(p.dst_addr,p.packetID,0,p.data_S[0: maxDataSize])
+            packetList.append(filledMTU)#Adds a max size packet into the packetList
+            q = NetworkPacket(p.dst_addr,p.packetID,1,p.data_S[maxDataSize: ]) #Creates another packet to be checked for size.
+            self.segmentPacket(packetList,q,mtu)#Recursivly checks size.            
+        else:
+            packetList.append(p)            
     ## thread target for the host to keep forwarding data
     def run(self):
         print (threading.currentThread().getName() + ': Starting')
