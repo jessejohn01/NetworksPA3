@@ -148,13 +148,13 @@ class Router:
     ##@param name: friendly router name for debugging
     # @param intf_count: the number of input and output interfaces 
     # @param max_queue_size: max queue length (passed to Interface)
-    def __init__(self, name, intf_count, max_queue_size):
+    def __init__(self, name, intf_count, max_queue_size,routing_table):
         self.stop = False #for thread termination
         self.name = name
         #create a list of interfaces
         self.in_intf_L = [Interface(max_queue_size) for _ in range(intf_count)]
         self.out_intf_L = [Interface(max_queue_size) for _ in range(intf_count)]
-
+        self.routing_table = routing_table
     ## called when printing the object
     def __str__(self):
         return 'Router_%s' % (self.name)
@@ -174,12 +174,18 @@ class Router:
                     # forwarding table to find the appropriate outgoing interface
                     # for now we assume the outgoing interface is also i
                     packetList = [] #Creates a list of segmented packets to send
-                    self.segmentPacket(packetList, p, self.out_intf_L[0].mtu)#Split the packets up.
+                    
+                    router_name_S = 'Router_' + self.name                           
+                    correct_routing_table = self.routing_table[router_name_S]      
+                    lookup = correct_routing_table[int(p.dst_addr)]                  
+                    
+                                        
+                    self.segmentPacket(packetList, p, self.out_intf_L[lookup].mtu)#Split the packets up.
                     for x in range(len(packetList)):      
-                        self.out_intf_L[i].put(packetList[x].to_byte_S(), True)
-                        print('%s: forwarding packet "%s" from interface %d to %d with mtu %d' % (self, packetList[x], i, i, self.out_intf_L[i].mtu))
+                        self.out_intf_L[lookup].put(packetList[x].to_byte_S(), True)
+                        print('%s: forwarding packet "%s" from interface %d to %d with mtu %d' % (self, packetList[x], i, lookup, self.out_intf_L[lookup].mtu))
             except queue.Full:
-                print('%s: packet "%s" lost on interface %d' % (self, p, i))
+                print('%s: packet "%s" lost on interface %d' % (self, p, lookup))
                 pass
     def segmentPacket(self, packetList,p,mtu): #This method keeps splitting packets down until we can send the entire message.
         if(p.isTooLong(mtu) and p.endFlag == 0):
